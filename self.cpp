@@ -1969,7 +1969,7 @@ int ReadComd(int k)		//read命令的处理函数：读文件
 	// 说明：刚打开的文件，其读指针指向文件开头(即读指针等于1)，约定空文件的读指针等于0。
 
 	short i,j,ii,i_uof,pos,offset;
-	short b,b0,bnum,count=0,readc;
+	short b,bnum,count=0,readc;
 	char attrib='\0';
 	char Buffer[SIZE+1];
 	FCB* fcbp;
@@ -2027,10 +2027,7 @@ int ReadComd(int k)		//read命令的处理函数：读文件
 	offset=(pos-1)%SIZE;	//在第bnum块的偏移位置offset处开始读(offset从0开始)
 	b=uof[i_uof].faddr;		//取文件首块号
 	for (i=0;i<bnum;i++)	//寻找读入的第一个盘块号
-	{
-		b0=b;
 		b=FAT[b];
-	}
 	ii=offset;
 	while (count<readc)		//读文件至Buffer并显示之
 	{

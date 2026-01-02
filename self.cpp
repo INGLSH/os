@@ -98,6 +98,7 @@ CurPath curpath;
 UnDel udtab[DM];				//定义删除文件恢复表，退出系统时该表可存于文件UdTab.dat中
 short Udelp=0;					//udtab表的第一个空表项的下标，系统初始化时它为0。
 								//当Udelp=DM时，表示表已满，需清除最早的表项(后续表项依次前移)
+int last_uof=-1;				//最近一次操作/打开的UOF下标
 short ffbp=1;
 //0号盘快中存储如下内容：
 //	short ffbp;		//从该位置开始查找空闲盘快(类似循环首次适应分配)
@@ -150,6 +151,9 @@ int buffer_to_file(FCB* fcbp,char* Buffer);	//Buffer写入文件
 int file_to_buffer(FCB* fcbp,char* Buffer);	//文件内容读到Buffer,返回文件长度
 int ParseCommand(char *);		//将输入的命令行分解成命令和参数等
 void ExecComd(int);				//执行命令
+int FindCurrentUof(void);		//获取最近一次操作/打开的UOF下标
+void UpdateLastUof(int index);	//更新last_uof
+unsigned char GetByteAt(FCB* fcbp,long pos);	//读取文件指定位置字节
 
 //#define INIT	//决定初始化还是从磁盘读入
 
@@ -567,33 +571,51 @@ int ReplaceComd(int k)
 }
 
 void HelpComd()				//help命令，帮助信息(显示各命令格式)
- {
-    cout<<"\n* * * * * * * * * 本系统主要的文件操作命令简述如下 * * * * * * * * * *\n\n";
-    cout<<"create <文件名>[ <文件属性>]　　　　　　——创建新文件,文件属性是r、h或s。\n";
-    cout<<"open <文件名>                           ——打开文件，操作类型可为r、h或(与)s。\n";
-	cout<<"write <文件名> [<位置/app>[ insert]]    ——在指定位置写文件(有插入功能)。\n";
-    cout<<"read <文件名> [<位置m> [<字节数n>]]     ——读文件，从第m字节处读n个字节。\n";
-    cout<<"close <文件名>　　　　　　　　　　　　　——关闭文件。\n";
-    cout<<"del <文件名>                            ——撤消(删除)文件。\n";
-    cout<<"dir [<路径名>] [|<属性>]                ——显示当前目录。\n";
-	cout<<"cd [<路径名>]                           ——改变当前目录。\n";
-	cout<<"md <路径名> [<属性>]                    ——创建指定目录。\n";
-	cout<<"rd [<路径名>]                           ——删除指定目录。\n";
-	cout<<"ren <旧文件名> <新文件名>               ——文件更名。\n";
-	cout<<"attrib <文件名> [±<属性>]              ——修改文件属性(r、h、s)。\n";
-	cout<<"copy <源文件名> [<目标文件名>]          ——复制文件。\n";
-	cout<<"type <文件名>                           ——显示文件内容。\n";
-	cout<<"rewind <文件名>                         ——将读、写指针移到文件第一个字符处。\n";
-	cout<<"fseek <文件名> <位置>                   ——将读、写指针都移到指定位置。\n";
-	cout<<"block <文件名>                          ——显示文件占用的盘块号。\n";
-	cout<<"closeall                                ——关闭当前打开的所有文件。\n";
-	cout<<"uof                                     ——显示UOF(用户打开文件表)。\n";
-	cout<<"undel [<路径名>]                        ——恢复指定目录中被删除的文件。\n";
-	cout<<"exit                                    ——退出本程序。\n";
-	cout<<"prompt                                  ——提示符是否显示当前目录(切换)。\n";
-	cout<<"fat                                     ——显示FAT表中空闲盘块数(0的个数)。\n";
-	cout<<"check                                   ——核对后显示FAT表中空闲盘块数。\n";
- }
+{
+	struct HelpItem
+	{
+		const char *name;
+		const char *detail;
+	};
+	static HelpItem items[]={
+		{"create","create <文件名> [<文件属性>]\n功能：创建新文件。\n属性：r(只读)、h(隐藏)、s(系统)，可组合。\n示例：create report r"},
+		{"open","open <文件名>\n功能：打开文件，建立UOF表项。\n示例：open /usr/note"},
+		{"write","write <文件名> [<位置/app> [insert]]\n功能：在指定位置写文件，可插入。\n示例：write note 1 insert"},
+		{"read","read <文件名> [<位置m> [<字节数n>]]\n功能：从第m字节处读n个字节。\n示例：read note 1 20"},
+		{"close","close [<文件名>]\n功能：关闭文件；省略文件名时关闭当前文件。\n示例：close note 或 close"},
+		{"del","del <文件名>\n功能：删除文件，支持恢复信息记录。\n示例：del /usr/tmp"},
+		{"dir","dir [<路径名>] [<属性>]\n功能：显示目录内容。\n示例：dir /bin"},
+		{"cd","cd [<路径名>]\n功能：改变当前目录或显示当前目录。\n示例：cd /usr"},
+		{"md","md <目录名> [<属性>]\n功能：创建目录并设置属性。\n示例：md data rh"},
+		{"rd","rd <目录名>\n功能：删除空目录。\n示例：rd /tmp"},
+		{"ren","ren <旧文件名> <新文件名>\n功能：文件改名。\n示例：ren a b"},
+		{"attrib","attrib <文件名> [±<属性>]\n功能：修改文件属性。\n示例：attrib note +r"},
+		{"copy","copy <源文件名> [<目标文件名>]\n功能：复制文件，可同名复制到目录。\n示例：copy a / 或 copy a .."},
+		{"type","type [<文件名>]\n功能：显示文件内容；省略文件名时显示当前文件。\n示例：type note 或 type"},
+		{"rewind","rewind <文件名>\n功能：读写指针移到文件开头。\n示例：rewind note"},
+		{"fseek","fseek <文件名> <位置>\n功能：读写指针移动到指定位置。\n示例：fseek note 10"},
+		{"block","block <文件名>\n功能：显示文件占用盘块号。\n示例：block note"},
+		{"closeall","closeall\n功能：关闭当前用户所有打开文件。"},
+		{"uof","uof\n功能：显示用户打开文件表。"},
+		{"undel","undel [<路径名>]\n功能：恢复指定目录中被删除文件。"},
+		{"exit","exit\n功能：退出本程序。"},
+		{"prompt","prompt\n功能：切换提示符是否显示当前目录。"},
+		{"fat","fat\n功能：显示FAT表中空闲盘块数。"},
+		{"check","check\n功能：核对并显示FAT表空闲盘块数。"},
+		{"fc","fc <文件1> <文件2>\n功能：逐字节比较两个文件内容。"},
+		{"replace","replace <文件名> <目录名>\n功能：用文件替换目录中同名文件。"}
+	};
+	int i,choice;
+	int count=sizeof(items)/sizeof(items[0]);
+	cout<<"\n* * * * * * * * * 命令列表 * * * * * * * * *\n";
+	for (i=0;i<count;i++)
+		cout<<setw(2)<<i+1<<". "<<items[i].name<<endl;
+	cout<<"\n请输入命令序号查看详细说明(0返回)：";
+	cin>>choice;
+	if (choice<=0 || choice>count)
+		return;
+	cout<<"\n["<<items[choice-1].name<<"]\n"<<items[choice-1].detail<<endl;
+}
 
 // 逐个字节比较指定的两个文件
 int FcComd(int k)
@@ -630,34 +652,40 @@ int FcComd(int k)
 		return -3;
 	}
 
-	if (fcbp1->Fsize!=fcbp2->Fsize)
+	if (fcbp1->Fsize==0 && fcbp2->Fsize==0)
 	{
-		cout<<"\n文件内容不同：长度不同。\n";
-		return 1;
-	}
-	if (fcbp1->Fsize==0)
-	{
-		cout<<"\n两个文件均为空文件，内容相同。\n";
+		cout<<"\n文件内容相同。\n";
 		return 1;
 	}
 
-	size=fcbp1->Fsize;
+	size=fcbp1->Fsize<fcbp2->Fsize ? fcbp1->Fsize : fcbp2->Fsize;
 	pos=0;
 	s1=fcbp1->Addr;
 	s2=fcbp2->Addr;
-	while (s1>0 && s2>0)
+	while (s1>0 && s2>0 && pos<size)
 	{
 		for (i=0;i<SIZE && pos<size;i++,pos++)
 		{
-			if (Disk[s1][i]!=Disk[s2][i])
+			unsigned char c1=(unsigned char)Disk[s1][i];
+			unsigned char c2=(unsigned char)Disk[s2][i];
+			if (c1!=c2)
 			{
-				cout<<"\n文件内容不同：第"<<pos<<"个字节不同。\n";
-				cout<<"文件1："<<Disk[s1][i]<<"  文件2："<<Disk[s2][i]<<endl;
+				cout<<"\n文件内容不同：第"<<pos+1<<"个字节不同。\n";
+				cout<<"文件1："<<(int)c1<<"  文件2："<<(int)c2<<endl;
 				return 1;
 			}
 		}
 		s1=FAT[s1];
 		s2=FAT[s2];
+	}
+	if (fcbp1->Fsize!=fcbp2->Fsize)
+	{
+		cout<<"\n文件内容不同：第"<<pos+1<<"个字节不同。\n";
+		if (fcbp1->Fsize<fcbp2->Fsize)
+			cout<<"文件1：<EOF>  文件2："<<(int)GetByteAt(fcbp2,pos)<<endl;
+		else
+			cout<<"文件1："<<(int)GetByteAt(fcbp1,pos)<<"  文件2：<EOF>"<<endl;
+		return 1;
 	}
 	cout<<"\n文件内容相同。\n";
 	return 1;
@@ -1087,8 +1115,37 @@ int TypeComd(int k)		//type命令处理函数(显示文件内容)
 
 	if(k<1)
 	{
-		cout<<"\n命令中无文件名。\n";
-		return -1;
+		int i_uof=FindCurrentUof();
+		if (i_uof<0)
+		{
+			cout<<"\n命令中无文件名且无当前文件。\n";
+			return -1;
+		}
+		strcpy(gFileName,uof[i_uof].fname);
+		if (uof[i_uof].faddr==0 || uof[i_uof].fsize==0)
+		{
+			cout<<"\n文件"<<gFileName<<"是空文件\n";
+			return 1;
+		}
+		s=uof[i_uof].faddr;
+		size=uof[i_uof].fsize;
+		Buffer=new char[size+1];
+		while (s>0)
+		{
+			for (i=0;i<SIZE;i++,jj++)
+			{
+				if (jj==size)
+					break;
+				Buffer[jj]=Disk[s][i];
+			}
+			if (i<SIZE)
+				break;
+			s=FAT[s];
+		}
+		Buffer[jj]='\0';
+		cout<<Buffer<<endl;
+		delete [] Buffer;
+		return 1;
 	}
 	s=ProcessPath(comd[1],FileName,k,0,'\020');//取FileName所在目录的首块号
 	if (s<1)			//路径错误
@@ -1174,6 +1231,30 @@ void Put_UOF(char *gFileName,int i,short status,FCB* fcbp)
 	else
 		uof[i].readp=0;				//读指针指向空位置
 	uof[i].writep=fcbp->Fsize+1;	//写指针指向文件末尾
+	UpdateLastUof(i);
+}
+
+/////////////////////////////////////////////////////////////////
+void UpdateLastUof(int index)
+{
+	if (index>=0 && index<S)
+		last_uof=index;
+}
+
+int FindCurrentUof(void)
+{
+	int i;
+	if (last_uof>=0 && last_uof<S && uof[last_uof].state>0)
+		return last_uof;
+	for (i=0;i<S;i++)
+	{
+		if (uof[i].state>0)
+		{
+			last_uof=i;
+			return i;
+		}
+	}
+	return -1;
 }
 
 /////////////////////////////////////////////////////////////////
@@ -1419,6 +1500,7 @@ int WriteComd(int k)		//write命令的处理函数
 		cout<<"\n文件"<<temppath<<"未打开或不存在，不能写文件。\n";
 		return -2;
 	}
+	UpdateLastUof(ii_uof);
 	if (uof[ii_uof].attr&'\01' && uof[ii_uof].state!=1)
 	{	//只读文件不是创建状态不能写
 		cout<<"\n"<<temppath<<"是只读文件，不能写。\n";
@@ -1533,11 +1615,19 @@ int CloseComd(int k)				//close命令的处理函数：关闭文件
 	FCB *p;
 	if (k<1)
 	{
-		cout<<"\n命令中缺少文件名。\n";
-		return -1;
+		i_uof=FindCurrentUof();
+		if (i_uof<0)
+		{
+			cout<<"\n没有可关闭的当前文件。\n";
+			return -1;
+		}
+		strcpy(temppath,uof[i_uof].fname);
 	}
-	FindPath(comd[1],attrib,0,p);	//构成全路径且去掉“..”存于temppath中
-	i_uof=Check_UOF(temppath);		//查UOF
+	else
+	{
+		FindPath(comd[1],attrib,0,p);	//构成全路径且去掉“..”存于temppath中
+		i_uof=Check_UOF(temppath);		//查UOF
+	}
 	if (i_uof==S)
 		cout<<"\n文件"<<temppath<<"未打开或不存在，不能关闭。\n";
 	else
@@ -1548,6 +1638,8 @@ int CloseComd(int k)				//close命令的处理函数：关闭文件
 		p->Fsize=uof[i_uof].fsize;	//保存文件的大小
 		cout<<"\n关闭文件"<<temppath<<"成功。\n";
 	}
+	if (i_uof==last_uof)
+		last_uof=FindCurrentUof();
 	return 1;
 }
 
@@ -1577,6 +1669,8 @@ void CloseallComd(int disp)    //closeall命令，关闭当前用户的所有文
 		cout<<"\n你没有打开文件，故无文件可关闭。\n\n";
 	else
 		cout<<"\n共关闭 "<<k<<" 个文件.\n\n";
+	if (k>0)
+		last_uof=-1;
 }
 
 /////////////////////////////////////////////////////////////////
@@ -1896,6 +1990,7 @@ int ReadComd(int k)		//read命令的处理函数：读文件
 		cout<<"\n文件"<<temppath<<"未打开或不存在，不能读文件。\n";
 		return -2;
 	}
+	UpdateLastUof(i_uof);
 	if (uof[i_uof].readp==0)
 	{
 		cout<<"\n文件"<<temppath<<"是空文件。\n";
@@ -2026,9 +2121,24 @@ int CopyComd(int k)		//copy命令的处理函数：复制文件
 	}
 	else	//k=2(命令中提供目标文件)的情况
 	{
-		s02=ProcessPath(comd[2],FileName2,k,0,'\20');//取FileName2所在目录的首块号
-		if (s02<1)			//目标路径错误
-			return s02;
+		int len=strlen(comd[2]);
+		if (strcmp(comd[2],"/")==0 || strcmp(comd[2],"..")==0 || (len>0 && comd[2][len-1]=='/'))
+		{
+			s02=FindPath(comd[2],'\020',1,fcbp);
+			if (s02<1)
+			{
+				cout<<"\n路径名错误！"<<endl;
+				return -1;
+			}
+			FileName2=FileName1;
+			target_is_dir=true;
+		}
+		else
+		{
+			s02=ProcessPath(comd[2],FileName2,k,0,'\20');//取FileName2所在目录的首块号
+			if (s02<1)			//目标路径错误
+				return s02;
+		}
 	}
 	if (!IsName(FileName2))		//若名字不符合规则
 	{
@@ -2646,6 +2756,22 @@ int file_to_buffer(FCB* fcbp,char* Buffer)	//文件内容读到Buffer,返回文�
 	}
 	Buffer[j]='\0';
 	return len;						//返回文件长度
+}
+
+/////////////////////////////////////////////////////////////////
+
+unsigned char GetByteAt(FCB* fcbp,long pos)
+{
+	short s=fcbp->Addr;
+	long offset=pos;
+	while (s>0 && offset>=SIZE)
+	{
+		s=FAT[s];
+		offset-=SIZE;
+	}
+	if (s<=0)
+		return 0;
+	return (unsigned char)Disk[s][offset];
 }
 
 /////////////////////////////////////////////////////////////////

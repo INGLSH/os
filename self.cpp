@@ -154,6 +154,7 @@ void ExecComd(int);				//执行命令
 int FindCurrentUof(void);		//获取最近一次操作/打开的UOF下标
 void UpdateLastUof(int index);	//更新last_uof
 unsigned char GetByteAt(FCB* fcbp,long pos);	//读取文件指定位置字节
+int M_NewDir(char *Name,FCB* p,short fs,char attrib);	//在p位置创建一新子目录
 
 //#define INIT	//决定初始化还是从磁盘读入
 
@@ -699,7 +700,8 @@ int GetAttrib(char* str,char& attrib)
 	int i,len;
 	char ar='\01',ah='\02',as='\04';
 	len=strlen(str);
-	_strlwr(str);		//转换成小写字符
+	for (i=0;i<len;i++)
+		str[i]=(char)tolower((unsigned char)str[i]);
 	// 仅支持直接的属性串格式（如"rh"），不再接受'|'前缀。
 	if (len==0)
 	{
@@ -711,13 +713,13 @@ int GetAttrib(char* str,char& attrib)
 		switch(str[i])
 		{
 			case 'r': attrib=attrib|ar;
-					break;
+				break;
 			case 'h': attrib=attrib|ah;
-					break;
+				break;
 			case 's': attrib=attrib|as;
-					break;
+				break;
 			default: cout<<"\n命令中属性参数错误。\n";
-					return -1;
+				return -1;
 		}
 	}
 	return 1;
@@ -725,77 +727,72 @@ int GetAttrib(char* str,char& attrib)
 
 /////////////////////////////////////////////////////////////////
 
-int DirComd(int k)	//dir??????????????????????
+int DirComd(int k)	//dir命令
 {
-	// ?????dir[ <???>[ <??>]]
-	// ????????????????????????????????
+	// 命令形式：dir[ <路径名>[ <属性>]]
+	// 显示指定目录下的文件和子目录。
 
 	short i,s;
-	short filecount,dircount,fsizecount;    //??????????????
-	char ch,attrib=' ',attr,cc;
+	short filecount,dircount,fsizecount;
+	char ch,attrib='\0',attr,cc;
 	FCB *fcbp,*p;
 	
 	filecount=dircount=fsizecount=0;
-	if (k>2)    //??????????????????
+	if (k>2)		//命令参数太多
 	{
-		cout<<"
-??????????
-";
+		cout<<"\n命令参数个数错误。\n";
 		return -1;
 	}
-	if (k<1)    //??? ?????????
+	if (k<1)		//命令无参数
 	{
 		strcpy(temppath,curpath.cpath);
-		s=curpath.fblock;    //???????????s
+		s=curpath.fblock;	//当前目录首块号
 	}
-	else if (k==1)        //???1???
+	else if (k==1)		//一个参数
 	{
 		int isAttr=1;
-		for (i=0; comd[1][i]!=' '; i++)
+		for (i=0; comd[1][i]!='\0'; i++)
 		{
-			char c=tolower(comd[1][i]);
+			char c=tolower((unsigned char)comd[1][i]);
 			if (c!='r' && c!='h' && c!='s')
 			{
 				isAttr=0;
 				break;
 			}
 		}
-		if (isAttr && comd[1][0]!=' ')
+		if (isAttr && comd[1][0]!='\0')
 		{
-			i=GetAttrib(comd[1],attrib);    // ??????????
+			i=GetAttrib(comd[1],attrib);	//解析属性串
 			if (i<0) return i;
 			strcpy(temppath,curpath.cpath);
-			s=curpath.fblock;    //???????????s
+			s=curpath.fblock;	//当前目录首块号
 		}
 		else
 		{
-			s=FindPath(comd[1],'',1,fcbp);    //?????(????)
+			s=FindPath(comd[1],'\020',1,fcbp);	//找指定目录
 			if (s<1)
 			{
-				cout<<"
-????????"<<endl;
+				cout<<"\n路径名错误！"<<endl;
 				return -1;
 			}
 		}
 	}
-	else        //???2?????? + ??
+	else		//两个参数：路径名 + 属性
 	{
-		s=FindPath(comd[1],'',1,fcbp);    //?????(????)
+		s=FindPath(comd[1],'\020',1,fcbp);	//找指定目录
 		if (s<1)
 		{
-			cout<<"
-????????"<<endl;
+			cout<<"\n路径名错误！"<<endl;
 			return -1;
 		}
-		if (comd[2][0]!=' ')
+		if (comd[2][0]!='\0')
 		{
 			i=GetAttrib(comd[2],attrib);
 			if (i<0) return i;
 		}
 	}
-	cout<<"
-The Directory of C:"<<temppath<<endl<<endl;
-while (s>0)
+	cout<<"\nThe Directory of C:"<<temppath<<endl<<endl;
+	while (s>0)
 	{
 		p=(FCB*) Disk[s];	//p指向该目录的第一个盘块
 		for (i=0;i<4;i++,p++)
@@ -818,27 +815,22 @@ while (s>0)
 					continue;
 			}
 			cout<<setiosflags(ios::left)<<setw(20)<<p->FileName;
-			if (p->Fattrib>='\20')	//是子目录
+			if (p->Fattrib>='\20')	//子目录
 			{
-				cout<<"<DIR>\n";
+				cout<<"<DIR>"<<setw(7)<<" "<<endl;
 				dircount++;
 			}
 			else
 			{
-				cout<<resetiosflags(ios::left);
-				cout<<setiosflags(ios::right)<<setw(10)<<p->Fsize<<endl;
+				cout<<setw(12)<<p->Fsize<<endl;
 				filecount++;
 				fsizecount+=p->Fsize;
 			}
 		}
-		if (ch=='\0') break;
-		s=FAT[s];		//指向该目录的下一个盘块
+		s=FAT[s];
 	}
-	cout<<resetiosflags(ios::left)<<endl;
-	cout<<setiosflags(ios::right)<<setw(6)<<filecount<<" file(s)";
-	cout<<setw(8)<<fsizecount<<" bytes"<<endl;
-	cout<<setw(6)<<dircount<<" dir(s) "<<setw(8)<<SIZE*FAT[0];
-	cout<<" free"<<endl;
+	cout<<"\n"<<filecount<<" File(s)  "<<fsizecount<<" bytes"<<endl;
+	cout<<dircount<<" Dir(s)"<<endl;
 	return 1;
 }
 
@@ -884,6 +876,7 @@ int CdComd(int k)
 	}
 }
 
+
 /////////////////////////////////////////////////////////////////
 
 int M_NewDir(char *Name,FCB* p,short fs,char attrib)	//在p位置创建一新子目录
@@ -910,6 +903,7 @@ int M_NewDir(char *Name,FCB* p,short fs,char attrib)	//在p位置创建一新子
 	q->Fsize=0;					//子目录的长度约定为0
 	return b;					//成功创建，返回
 }
+
 
 /////////////////////////////////////////////////////////////////
 
@@ -958,6 +952,8 @@ int ProcessPath(char* path,char* &Name,int k,int n,char attrib)
 	}
 	return s;
 }
+
+
 
 /////////////////////////////////////////////////////////////////
 
@@ -2131,7 +2127,6 @@ int CopyComd(int k)		//copy命令的处理函数：复制文件
 				return -1;
 			}
 			FileName2=FileName1;
-			target_is_dir=true;
 		}
 		else
 		{
@@ -2889,4 +2884,3 @@ int ParseCommand(char *p)	//将输入的命令行分解成命令和参数等
 	}
 	return k;
 }
-
